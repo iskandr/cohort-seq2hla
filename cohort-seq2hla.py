@@ -77,6 +77,9 @@ def concat_compressed_fastq_files(
             suffix,
             fastq_paths,
             target_dir):
+        """
+        Returns process so we can start multiple concat jobs simultaneously
+        """
         combined_fastq_name = "%s_%s_%s.fastq" % (
             group_name,
             sample_name,
@@ -87,11 +90,10 @@ def concat_compressed_fastq_files(
             len(fastq_paths),
             combined_fastq_path)
         with open(combined_fastq_path, 'w') as output_file:
-            subprocess.check_call(
-                ["zcat"] + fastq_paths,
+            process = subprocess.Popen(
+                args=["zcat"] + fastq_paths,
                 stdout=output_file)
-        assert exists(combined_fastq_path)
-        return combined_fastq_path
+        return combined_fastq_path, process
 
 if __name__ == "__main__":
     if not exists(args.base_dir):
@@ -136,7 +138,7 @@ if __name__ == "__main__":
             fastq_path,
             args.left_reads_pattern)
 
-        left_combined_fastq_path = concat_compressed_fastq_files(
+        left_combined_fastq_path, p_left = concat_compressed_fastq_files(
             group_name=group_name,
             sample_name=sample_name,
             suffix="R1",
@@ -147,12 +149,18 @@ if __name__ == "__main__":
             fastq_path,
             args.right_reads_pattern)
 
-        right_combined_fastq_path = concat_compressed_fastq_files(
+        right_combined_fastq_path, p_right = concat_compressed_fastq_files(
             group_name=group_name,
             sample_name=sample_name,
             suffix="R2",
             fastq_paths=right_fastq_paths,
             target_dir=args.temp_fastq_dir)
+
+        if p_left.wait() != 0:
+            raise ValueError("Concat of left reads failed")
+
+        if p_right.wait() != 0:
+            raise ValueError("Concat of right reads failed")
 
         subprocess.check_call(
             [

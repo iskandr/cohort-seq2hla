@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import argparse
+from glob import glob
+import logging
 from os.path import join, exists, isdir
 from os import listdir
-from glob import glob
+import subprocess
 
 parser = argparse.ArgumentParser()
 
@@ -48,6 +49,16 @@ parser.add_argument(
     default="*_R2_*.fastq.gz",
     help="Wildcard pattern for FASTQ files containing left reads of mate-pairs")
 
+parser.add_argument(
+    "--seq2hla-path",
+    default="../seq2hla/seq2HLA.py",
+    help="Where is the seq2HLA repository located?")
+
+parser.add_argument(
+    "--temp-fastq-dir",
+    default=".",
+    help="Dir for concatenated FASTQ's (seq2HLA can't handle multiple lanes)")
+
 args = parser.parse_args()
 
 def paths_from_pattern(base_dir, pattern):
@@ -58,10 +69,29 @@ def paths_from_pattern(base_dir, pattern):
     ]
     if len(paths) == 0:
         raise ValueError("No FASTQ files found for %s" % full_pattern)
-    else:
-        for path in paths:
-            logging.info("Found FASTQ file %s" % path)
     return paths
+
+def concat_compressed_fastq_files(
+            group_name,
+            sample_name,
+            suffix,
+            fastq_paths,
+            target_dir):
+        combined_fastq_name = "%s_%s_%s.fastq" % (
+            group_name,
+            sample_name,
+            suffix)
+        combined_fastq_path = join(target_dir, combined_fastq_name)
+        logging.info(
+            "Combining %d FASTQ files into %s",
+            len(fastq_paths),
+            combined_fastq_path)
+        with open(combined_fastq_path, 'w') as output_file:
+            subprocess.check_call(
+                ["zcat"] + fastq_paths,
+                stdout=output_file)
+        assert exists(combined_fastq_path)
+        return combined_fastq_path
 
 if __name__ == "__main__":
     if not exists(args.base_dir):
@@ -93,6 +123,8 @@ if __name__ == "__main__":
                 sample_paths[(group_name, sample_name)] = sample_path
 
     for ((group_name, sample_name), sample_path) in sample_paths.items():
+        logging.info("Looking for FASTQ files for %s:%s" % (
+            group_name, sample_name))
         fastq_path = join(sample_path, args.rna_fastq_subdir)
         if not exists(fastq_path):
             raise ValueError("Missing FASTQ subdirectory '%s' for %s:%s" % (
@@ -104,6 +136,28 @@ if __name__ == "__main__":
             fastq_path,
             args.left_reads_pattern)
 
+        left_combined_fastq_path = concat_compressed_fastq_files(
+            group_name=group_name,
+            sample_name=sample_name,
+            suffix="R1",
+            fastq_paths=left_fastq_paths,
+            target_dir=args.temp_fastq_dir)
+
         right_fastq_paths = paths_from_pattern(
             fastq_path,
             args.right_reads_pattern)
+
+        right_combined_fastq_path = concat_compressed_fastq_files(
+            group_name=group_name,
+            sample_name=sample_name,
+            suffix="R2",
+            fastq_paths=right_fastq_paths,
+            target_dir=args.temp_fastq_dir)
+
+        subprocess.check_call(
+            [
+                "python", args.seq2hla_path,
+                "-1", left_combined_fastq_path,
+                "-2", right_combined_fastq_path,
+                "-r", "%s_%s" % (group_name, sample_name)
+            ])
